@@ -1,0 +1,87 @@
+version: '2.1'
+services:
+  jobmanager:
+    build: .  # Constrói a imagem usando o Dockerfile no diretório atual
+    image: pyflink/pyflink:1.16.0-scala_2.12  # Usa a imagem base do PyFlink com a versão específica
+    volumes:
+      - .:/opt/trabalho  # Monta o diretório atual como volume em /opt/trabalho no contêiner
+    hostname: "jobmanager"
+    expose:
+      - "6123"  # Expõe a porta 6123
+    ports:
+      - "8081:8081"  # Mapeia a porta 8081 do host para a porta 8081 do contêiner
+    command: jobmanager  # Comando para iniciar o JobManager
+    environment:
+      - JOB_MANAGER_RPC_ADDRESS=jobmanager  # Configura a variável de ambiente JOB_MANAGER_RPC_ADDRESS
+
+  taskmanager:
+    image: pyflink/pyflink:1.16.0-scala_2.12
+    volumes:
+    - .:/opt/trabalho
+    expose:
+      - "6121"
+      - "6122"
+    depends_on:
+      - jobmanager  # Garante que o JobManager esteja pronto antes de iniciar o TaskManager
+    command: taskmanager  # Comando para iniciar o TaskManager
+    links:
+      - jobmanager:jobmanager
+    environment:
+      - JOB_MANAGER_RPC_ADDRESS=jobmanager
+
+  zookeeper:
+    image: wurstmeister/zookeeper:3.4.6
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    ports:
+      - "2181:2181"  # Mapeia a porta 2181 do host para a porta 2181 do contêiner
+
+  kafka:
+    image: wurstmeister/kafka:2.13-2.8.1
+    ports:
+      - "9092:9092"  # Mapeia a porta 9092 do host para a porta 9092 do contêiner
+    depends_on:
+      - zookeeper  # Garante que o Zookeeper esteja pronto antes de iniciar o Kafka
+    environment:
+      HOSTNAME_COMMAND: "route -n | awk '/UG[ \t]/{print $$2}'"
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_CREATE_TOPICS: "temperature_msg:1:1"
+
+  generator:
+    build: generator  # Constrói a imagem do gerador usando o Dockerfile no diretório 'generator'
+    image: generator:1.0  # Usa a imagem do gerador com a versão específica
+    depends_on:
+      - kafka  # Garante que o Kafka esteja pronto antes de iniciar o gerador
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.8.0
+    environment:
+      - cluster.name=docker-cluster
+      - bootstrap.memory_lock=true
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+      - discovery.type=single-node
+    ports:
+      - "9200:9200"  # Mapeia a porta 9200 do host para a porta 9200 do contêiner
+      - "9300:9300"  # Mapeia a porta 9300 do host para a porta 9300 do contêiner
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:7.8.0
+    ports:
+      - "5601:5601"  # Mapeia a porta 5601 do host para a porta 5601 do contêiner
+    depends_on:
+      - elasticsearch  # Garante que o Elasticsearch esteja pronto antes de iniciar o Kibana
+
+  load-kibana-dashboard:
+    build: ./kibana  # Constrói a imagem do carregador do painel do Kibana usando o Dockerfile no diretório 'kibana'
+    command: ['/bin/bash', '-c', 'cat /tmp/load/load_ndjson.sh | tr -d "\r" | bash']
+    depends_on:
+      - kibana  # Garante que o Kibana esteja pronto antes de carregar o painel
